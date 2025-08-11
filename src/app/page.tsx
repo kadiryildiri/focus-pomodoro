@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Menu, Pause, Play, RotateCcw, SkipForward } from "lucide-react";
+import dynamic from "next/dynamic";
+import CategorySelect from "@/components/category-select";
+
+const LottiePlayer = dynamic(
+  () => import("@lottiefiles/react-lottie-player").then((m) => m.Player),
+  { ssr: false }
+);
 
 type TimerMode = "focus" | "short" | "long";
 
@@ -38,15 +38,24 @@ const STORAGE_KEYS = {
 const CATEGORIES = ["Genel", "Çalışma", "Yazılım", "Okuma"] as const;
 
 function useLocalStorageNumber(key: string, initialValue: number) {
-  const [value, setValue] = useState<number>(() => {
-    if (typeof window === "undefined") return initialValue;
-    const raw = window.localStorage.getItem(key);
-    const parsed = raw ? Number(raw) : NaN;
-    return Number.isFinite(parsed) ? parsed : initialValue;
-  });
+  const [value, setValue] = useState<number>(initialValue);
+  const didLoadRef = useRef(false);
 
+  // Load on mount (client-only)
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isFinite(parsed)) {
+      setValue(parsed);
+    }
+    didLoadRef.current = true;
+  }, [key]);
+
+  // Persist after we've attempted an initial load
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!didLoadRef.current) return;
     window.localStorage.setItem(key, String(value));
   }, [key, value]);
 
@@ -62,35 +71,46 @@ function secondsToClock(totalSeconds: number) {
 }
 
 export default function Home() {
-  // durations stored in localStorage
-  const [durations] = useState<Durations>(() => {
-    if (typeof window === "undefined") return DEFAULT_DURATIONS;
-    const raw = window.localStorage.getItem(STORAGE_KEYS.durations);
+  // durations stored in localStorage (hydrate after mount to avoid SSR mismatch)
+  const [durations, setDurations] = useState<Durations>(DEFAULT_DURATIONS);
+  const [durationsLoaded, setDurationsLoaded] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     try {
-      const parsed = raw ? (JSON.parse(raw) as Partial<Durations>) : {};
-      return { ...DEFAULT_DURATIONS, ...parsed } as Durations;
+      const raw = window.localStorage.getItem(STORAGE_KEYS.durations);
+      const parsed = raw ? (JSON.parse(raw) as Partial<Durations>) : undefined;
+      if (parsed && typeof parsed === "object") {
+        setDurations((prev) => ({ ...prev, ...parsed }));
+      }
     } catch {
-      return DEFAULT_DURATIONS;
+      // ignore malformed JSON
     }
-  });
+    setDurationsLoaded(true);
+  }, []);
   useEffect(() => {
-    if (typeof window !== "undefined")
-      window.localStorage.setItem(
-        STORAGE_KEYS.durations,
-        JSON.stringify(durations)
-      );
-  }, [durations]);
-
-  const [selectedCategory, setSelectedCategory] = useState<string>(() => {
-    if (typeof window === "undefined") return CATEGORIES[0];
-    return (
-      window.localStorage.getItem(STORAGE_KEYS.category) ?? CATEGORIES[0]
+    if (!durationsLoaded) return;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      STORAGE_KEYS.durations,
+      JSON.stringify(durations)
     );
-  });
+  }, [durations, durationsLoaded]);
+
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    CATEGORIES[0]
+  );
+  const [categoryLoaded, setCategoryLoaded] = useState(false);
   useEffect(() => {
-    if (typeof window !== "undefined")
-      window.localStorage.setItem(STORAGE_KEYS.category, selectedCategory);
-  }, [selectedCategory]);
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(STORAGE_KEYS.category);
+    if (stored) setSelectedCategory(stored);
+    setCategoryLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (!categoryLoaded) return;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(STORAGE_KEYS.category, selectedCategory);
+  }, [selectedCategory, categoryLoaded]);
 
   const [mode, setMode] = useState<TimerMode>("focus");
   const [isRunning, setIsRunning] = useState(false);
@@ -104,10 +124,7 @@ export default function Home() {
   );
 
   // seconds remaining
-  const initialSeconds = useMemo(() => durations[mode] * 60, [durations, mode]);
-  const [remainingSeconds, setRemainingSeconds] = useState<number>(
-    initialSeconds
-  );
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(() => durations[mode] * 60);
   useEffect(() => setRemainingSeconds(durations[mode] * 60), [durations, mode]);
 
   const intervalRef = useRef<number | null>(null);
@@ -140,9 +157,8 @@ export default function Home() {
 
   function beep() {
     const AudioContextCtor =
-      window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
+        .webkitAudioContext || window.AudioContext;
     if (!AudioContextCtor) return;
     const ctx = new AudioContextCtor();
     const o = ctx.createOscillator();
@@ -231,68 +247,73 @@ export default function Home() {
 
       {/* Center Timer */}
       <main className="grid place-items-center px-4 py-16 min-h-dvh">
-        <Card className="rounded-[32px] w-[310px] sm:w-[360px] shadow-lg shadow-black/5 dark:shadow-black/30">
-          <CardContent className="p-8">
-            <div className="text-center space-y-3">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">{modeLabel}</div>
-              <div className="font-mono text-6xl sm:text-7xl font-semibold leading-none bg-gradient-to-b from-foreground to-foreground/70 bg-clip-text text-transparent">
-                {secondsToClock(remainingSeconds)}
+        {/* Wrapper to position Lottie relative to the card */}
+        <div className="relative">
+          {/* Lottie animation from public placed flush to the top-right of the card */}
+          <LottiePlayer
+            autoplay
+            loop
+            keepLastFrame
+            speed={0.3}
+            src="/Le Petit Chat _Cat_ Noir.json"
+            className="pointer-events-none absolute -top-28 -right-0 h-28 w-28 z-10"
+            aria-hidden
+          />
+          <Card className="rounded-[32px] w-[310px] sm:w-[360px] shadow-lg shadow-black/5 dark:shadow-black/30">
+            <CardContent className="p-8">
+              <div className="text-center space-y-3">
+                <div className="text-xs uppercase tracking-wider text-muted-foreground">{modeLabel}</div>
+                <div className="font-mono text-6xl sm:text-7xl font-semibold leading-none bg-gradient-to-b from-foreground to-foreground/70 bg-clip-text text-transparent">
+                  {secondsToClock(remainingSeconds)}
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Kategori</div>
+                  <CategorySelect
+                    value={selectedCategory}
+                    onChange={(v) => setSelectedCategory(v)}
+                    options={[...CATEGORIES]}
+                    className="w-full"
+                  />
+                </div>
               </div>
-              <div>
-                <Select
-                  value={selectedCategory}
-                  onValueChange={(v) => setSelectedCategory(v)}
+
+              <div className="mt-8 flex items-center justify-center gap-6">
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  className="h-14 w-14 rounded-full shadow-sm"
+                  onClick={handleReset}
+                  aria-label="Sıfırla"
                 >
-                  <SelectTrigger className="w-full h-10 rounded-lg">
-                    <SelectValue placeholder="Kategori" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CATEGORIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  <RotateCcw className="h-6 w-6" />
+                </Button>
+
+                <Button
+                  size="icon"
+                  className="h-16 w-16 rounded-full shadow-md shadow-primary/20"
+                  onClick={handleStartPause}
+                  aria-label={isRunning ? "Duraklat" : "Başlat"}
+                >
+                  {isRunning ? (
+                    <Pause className="h-7 w-7" />
+                  ) : (
+                    <Play className="h-7 w-7" />
+                  )}
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  className="h-14 w-14 rounded-full shadow-sm"
+                  onClick={handleSkip}
+                  aria-label="Geç"
+                >
+                  <SkipForward className="h-6 w-6" />
+                </Button>
               </div>
-            </div>
-
-            <div className="mt-8 flex items-center justify-center gap-6">
-              <Button
-                variant="secondary"
-                size="icon"
-                className="h-14 w-14 rounded-full shadow-sm"
-                onClick={handleReset}
-                aria-label="Sıfırla"
-              >
-                <RotateCcw className="h-6 w-6" />
-              </Button>
-
-              <Button
-                size="icon"
-                className="h-16 w-16 rounded-full shadow-md shadow-primary/20"
-                onClick={handleStartPause}
-                aria-label={isRunning ? "Duraklat" : "Başlat"}
-              >
-                {isRunning ? (
-                  <Pause className="h-7 w-7" />
-                ) : (
-                  <Play className="h-7 w-7" />
-                )}
-              </Button>
-
-              <Button
-                variant="secondary"
-                size="icon"
-                className="h-14 w-14 rounded-full shadow-sm"
-                onClick={handleSkip}
-                aria-label="Geç"
-              >
-                <SkipForward className="h-6 w-6" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       </main>
     </div>
   );
