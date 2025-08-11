@@ -1,103 +1,299 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Menu, Pause, Play, RotateCcw, SkipForward } from "lucide-react";
+
+type TimerMode = "focus" | "short" | "long";
+
+type Durations = {
+  focus: number; // minutes
+  short: number; // minutes
+  long: number; // minutes
+};
+
+const DEFAULT_DURATIONS: Durations = {
+  focus: 25,
+  short: 5,
+  long: 15,
+};
+
+const STORAGE_KEYS = {
+  durations: "fp:durations",
+  category: "fp:category",
+  totalMinutes: "fp:total-minutes",
+  streakCount: "fp:focus-streak",
+} as const;
+
+const CATEGORIES = ["Genel", "Çalışma", "Yazılım", "Okuma"] as const;
+
+function useLocalStorageNumber(key: string, initialValue: number) {
+  const [value, setValue] = useState<number>(() => {
+    if (typeof window === "undefined") return initialValue;
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed) ? parsed : initialValue;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(key, String(value));
+  }, [key, value]);
+
+  return [value, setValue] as const;
+}
+
+function secondsToClock(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (totalSeconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  // durations stored in localStorage
+  const [durations] = useState<Durations>(() => {
+    if (typeof window === "undefined") return DEFAULT_DURATIONS;
+    const raw = window.localStorage.getItem(STORAGE_KEYS.durations);
+    try {
+      const parsed = raw ? (JSON.parse(raw) as Partial<Durations>) : {};
+      return { ...DEFAULT_DURATIONS, ...parsed } as Durations;
+    } catch {
+      return DEFAULT_DURATIONS;
+    }
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined")
+      window.localStorage.setItem(
+        STORAGE_KEYS.durations,
+        JSON.stringify(durations)
+      );
+  }, [durations]);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => {
+    if (typeof window === "undefined") return CATEGORIES[0];
+    return (
+      window.localStorage.getItem(STORAGE_KEYS.category) ?? CATEGORIES[0]
+    );
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined")
+      window.localStorage.setItem(STORAGE_KEYS.category, selectedCategory);
+  }, [selectedCategory]);
+
+  const [mode, setMode] = useState<TimerMode>("focus");
+  const [isRunning, setIsRunning] = useState(false);
+  const [completedFocusCount, setCompletedFocusCount] = useLocalStorageNumber(
+    STORAGE_KEYS.streakCount,
+    0
+  );
+  const [totalMinutes, setTotalMinutes] = useLocalStorageNumber(
+    STORAGE_KEYS.totalMinutes,
+    0
+  );
+
+  // seconds remaining
+  const initialSeconds = useMemo(() => durations[mode] * 60, [durations, mode]);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(
+    initialSeconds
+  );
+  useEffect(() => setRemainingSeconds(durations[mode] * 60), [durations, mode]);
+
+  const intervalRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isRunning) return;
+    intervalRef.current = window.setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(intervalRef.current ?? undefined);
+          intervalRef.current = null;
+          setIsRunning(false);
+          onFinish();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (intervalRef.current) window.clearInterval(intervalRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning]);
+
+  // Update page title while running
+  useEffect(() => {
+    const titlePrefix = isRunning ? `⏳ ${secondsToClock(remainingSeconds)} ` : "";
+    document.title = `${titlePrefix}Focus Pomodoro`;
+  }, [isRunning, remainingSeconds]);
+
+  function beep() {
+    const AudioContextCtor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const ctx = new AudioContextCtor();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = 880;
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start();
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.2);
+    setTimeout(() => {
+      o.stop();
+      ctx.close();
+    }, 1300);
+  }
+
+  function nextMode(current: TimerMode): TimerMode {
+    if (current === "focus") {
+      // every 4 focus sessions give a long break
+      const next = (completedFocusCount + 1) % 4 === 0 ? "long" : "short";
+      return next;
+    }
+    return "focus";
+  }
+
+  function onFinish() {
+    beep();
+    if (mode === "focus") {
+      setCompletedFocusCount((c) => c + 1);
+      setTotalMinutes((m) => m + durations.focus);
+    }
+    const nm = nextMode(mode);
+    setMode(nm);
+    setRemainingSeconds(durations[nm] * 60);
+  }
+
+  function handleStartPause() {
+    setIsRunning((r) => !r);
+  }
+
+  function handleReset() {
+    setIsRunning(false);
+    setRemainingSeconds(durations[mode] * 60);
+  }
+
+  function handleSkip() {
+    setIsRunning(false);
+    if (mode === "focus") {
+      // skip does not count as completed focus
+    }
+    const nm = nextMode(mode);
+    setMode(nm);
+    setRemainingSeconds(durations[nm] * 60);
+  }
+
+  const modeLabel = mode === "focus" ? "Focus" : "Break";
+
+  return (
+    <div className="h-dvh overflow-hidden flex flex-col relative isolate">
+      {/* Decorative background */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+        <div className="absolute -top-24 left-1/2 -translate-x-1/2 h-[28rem] w-[56rem] rounded-full blur-3xl opacity-60 [background:radial-gradient(800px_400px_at_center,var(--chart-4),transparent_70%)] dark:opacity-30" />
+        <div className="absolute -bottom-32 right-0 h-[26rem] w-[36rem] rounded-full blur-3xl opacity-50 [background:radial-gradient(700px_350px_at_center,var(--chart-2),transparent_70%)] dark:opacity-25" />
+      </div>
+
+      {/* Top Bar (absolute, transparent) */}
+      <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-4 h-16">
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button variant="ghost" size="icon" className="rounded-full ring-1 ring-border/50 hover:ring-border">
+              <Menu className="h-5 w-5" />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-80" aria-label="Menü">
+            <SheetTitle className="sr-only">Menü</SheetTitle>
+          </SheetContent>
+        </Sheet>
+
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Minutes</span>
+          <Badge variant="secondary" className="rounded-full px-2.5 py-0.5">
+            {totalMinutes}
+          </Badge>
         </div>
+      </div>
+
+      {/* Center Timer */}
+      <main className="grid place-items-center px-4 py-16 min-h-dvh">
+        <Card className="rounded-[32px] w-[310px] sm:w-[360px] shadow-lg shadow-black/5 dark:shadow-black/30">
+          <CardContent className="p-8">
+            <div className="text-center space-y-3">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">{modeLabel}</div>
+              <div className="font-mono text-6xl sm:text-7xl font-semibold leading-none bg-gradient-to-b from-foreground to-foreground/70 bg-clip-text text-transparent">
+                {secondsToClock(remainingSeconds)}
+              </div>
+              <div>
+                <Select
+                  value={selectedCategory}
+                  onValueChange={(v) => setSelectedCategory(v)}
+                >
+                  <SelectTrigger className="w-full h-10 rounded-lg">
+                    <SelectValue placeholder="Kategori" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CATEGORIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="mt-8 flex items-center justify-center gap-6">
+              <Button
+                variant="secondary"
+                size="icon"
+                className="h-14 w-14 rounded-full shadow-sm"
+                onClick={handleReset}
+                aria-label="Sıfırla"
+              >
+                <RotateCcw className="h-6 w-6" />
+              </Button>
+
+              <Button
+                size="icon"
+                className="h-16 w-16 rounded-full shadow-md shadow-primary/20"
+                onClick={handleStartPause}
+                aria-label={isRunning ? "Duraklat" : "Başlat"}
+              >
+                {isRunning ? (
+                  <Pause className="h-7 w-7" />
+                ) : (
+                  <Play className="h-7 w-7" />
+                )}
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="icon"
+                className="h-14 w-14 rounded-full shadow-sm"
+                onClick={handleSkip}
+                aria-label="Geç"
+              >
+                <SkipForward className="h-6 w-6" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
     </div>
   );
 }
