@@ -14,6 +14,7 @@ import {
   Code2,
   Sparkles,
   Search,
+  Plus,
   type LucideIcon,
 } from "lucide-react"
 
@@ -30,6 +31,7 @@ export type CategorySelectProps = {
   options: Array<string | CategoryOption>
   placeholder?: string
   className?: string
+  onCreateOption?: (value: string) => void
 }
 
 const defaultIconByLabel: Record<string, LucideIcon> = {
@@ -77,6 +79,7 @@ export function CategorySelect({
   options,
   placeholder = "Kategori",
   className,
+  onCreateOption,
 }: CategorySelectProps) {
   const [query, setQuery] = React.useState("")
   const normalized = React.useMemo(() => normalizeOptions(options), [options])
@@ -95,8 +98,27 @@ export function CategorySelect({
   )
   const SelectedIcon = selectedOption?.icon ?? Sparkles
 
+  const queryTrimmed = query.trim()
+  const queryLc = queryTrimmed.toLocaleLowerCase("tr")
+  const hasExactMatch = React.useMemo(
+    () =>
+      normalized.some(
+        (o) => (o.label ?? o.value).toLocaleLowerCase("tr") === queryLc
+      ),
+    [normalized, queryLc]
+  )
+  const shouldShowCreate = queryTrimmed.length > 0 && !hasExactMatch
+
+  const handleSelectChange = (nextValue: string) => {
+    const exists = normalized.some((o) => o.value === nextValue)
+    if (!exists) {
+      onCreateOption?.(nextValue)
+    }
+    onChange(nextValue)
+  }
+
   return (
-    <Select value={value} onValueChange={onChange}>
+    <Select value={value} onValueChange={handleSelectChange}>
       <SelectTrigger
         aria-label="Kategori seçimi"
         data-state={undefined}
@@ -134,14 +156,31 @@ export function CategorySelect({
                 "w-full h-9 pl-9 pr-3 rounded-md text-sm",
                 "bg-background border border-input focus-visible:outline-hidden focus-visible:ring-[3px] focus-visible:ring-ring/50"
               )}
-              placeholder="Ara..."
+              placeholder="Ara veya yeni etiket ekle"
               aria-label="Kategori ara"
             />
           </div>
         </div>
 
         <div className="max-h-64 overflow-y-auto p-1">
-          {filtered.length === 0 ? (
+          {shouldShowCreate && (
+            <SelectItem
+              key={`__create__:${queryTrimmed}`}
+              value={queryTrimmed}
+              textValue={queryTrimmed}
+              className={cn(
+                "rounded-lg data-[highlighted]:bg-accent/60 data-[state=checked]:bg-accent/70",
+                "transition-colors"
+              )}
+            >
+              <span className="mr-1 text-emerald-600 dark:text-emerald-400" aria-hidden>
+                <Plus className="size-4" />
+              </span>
+              <span className="truncate">Yeni etiket ekle: &quot;{queryTrimmed}&quot;</span>
+            </SelectItem>
+          )}
+
+          {filtered.length === 0 && !shouldShowCreate ? (
             <div className="px-3 py-6 text-sm text-muted-foreground text-center">
               Sonuç bulunamadı
             </div>

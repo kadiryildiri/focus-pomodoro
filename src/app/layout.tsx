@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Focus Pomodoro",
   description: "Minimal ve şık Pomodoro zamanlayıcı",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({
